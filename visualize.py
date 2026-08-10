@@ -22,8 +22,6 @@ GRATE_POS_FRACTION = 0.4
 
 BRICK_FACE = "#c96a4a"
 BRICK_EDGE = "#5a2d1a"
-CORNER_FACE = "#8c4830"
-CORNER_EDGE = "#2a140a"
 GRATE_COLOR = "#333333"
 
 
@@ -45,12 +43,9 @@ def draw_front(ax, plan: Plan) -> None:
         base = plan.side_len
         for st in _wall_stones(course, wall=1):
             x0 = st.pos - base
-            face = CORNER_FACE if st.corner else BRICK_FACE
-            edge = CORNER_EDGE if st.corner else BRICK_EDGE
-            lw = CORNER_LW if st.corner else BRICK_LW
             ax.add_patch(Rectangle(
                 (x0, z0), st.length, BRICK_H,
-                facecolor=face, edgecolor=edge, lw=lw))
+                facecolor=BRICK_FACE, edgecolor=BRICK_EDGE, lw=BRICK_LW))
 
     grate_z = GRATE_POS_FRACTION * plan.height - GRATE_TH
     ax.add_patch(Rectangle(
@@ -74,12 +69,9 @@ def draw_side(ax, plan: Plan) -> None:
         course = plan.course_b if r % 2 == 1 else plan.course_a
         for st in _wall_stones(course, wall=0):
             x0 = st.pos
-            face = CORNER_FACE if st.corner else BRICK_FACE
-            edge = CORNER_EDGE if st.corner else BRICK_EDGE
-            lw = CORNER_LW if st.corner else BRICK_LW
             ax.add_patch(Rectangle(
                 (x0, z0), st.length, BRICK_H,
-                facecolor=face, edgecolor=edge, lw=lw))
+                facecolor=BRICK_FACE, edgecolor=BRICK_EDGE, lw=BRICK_LW))
 
     grate_z = GRATE_POS_FRACTION * plan.height - GRATE_TH
     ax.add_patch(Rectangle(
@@ -119,12 +111,9 @@ def draw_top(ax, plan: Plan) -> None:
     course = plan.course_a
     for st in course:
         x0, y0, w, h = _wall2rect_top(st, plan)
-        face = CORNER_FACE if st.corner else BRICK_FACE
-        edge = CORNER_EDGE if st.corner else BRICK_EDGE
-        lw = CORNER_LW if st.corner else BRICK_LW
         ax.add_patch(Rectangle(
             (x0, y0), w, h,
-            facecolor=face, edgecolor=edge, lw=lw))
+            facecolor=BRICK_FACE, edgecolor=BRICK_EDGE, lw=BRICK_LW))
 
     ax.add_patch(Rectangle(
         (WALL + plan.clear, plan.clear),
