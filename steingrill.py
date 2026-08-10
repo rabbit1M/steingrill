@@ -1,11 +1,9 @@
 """Planung einer U-foermigen Grillumfassung aus deutschen Normalformat-Ziegeln.
 
 Die drei Waende (linke Seitenwand, Rueckwand, rechte Seitenwand) werden als
-*ein einziger fortlaufender Mauerzug* im Läuferverband betrachtet, der zweimal
-um 90° abknickt. Dadurch versetzt der Verband automatisch um die Ecken: An
-jeder Ecke liegt je Lage entweder ein um 90° gedrehter Eck-Stein (der die Ecke
-umgreift) oder eine Fuge, die in der naechsten Lage wieder von einem Eck-Stein
-ueberdeckt wird. Es entsteht keine durchgehende Fuge von unten nach oben.
+wechselnder Eckverband geplant. In jeder Lage bleiben die Steine rechteckig;
+die Ecke gehoert abwechselnd der Rueckwand oder den Seitenwaenden. Halbe
+Steine liegen nur an den beiden freien Seitenenden.
 """
 
 from __future__ import annotations
@@ -23,22 +21,27 @@ WALL = 115
 
 
 # ---------------------------------------------------------------------------
-# Raster des U-Mauerzugs: ein durchgehender Laeuferverband um beide Ecken
+# Raster der drei geraden Wandabschnitte
 # ---------------------------------------------------------------------------
 def _module(joint: float) -> float:
-    """Rastereinheit: halber Stein + Fuge. Die gesamte U-Laenge ist ein
-    Vielfaches dieser Einheit (minus eine Fuge am freien Ende)."""
+    """Rastereinheit: halber Stein plus Fuge."""
     return HALF_BRICK_L + joint
 
 
 def clean_total(total_desired: float, joint: float) -> int:
-    """Kleinste Laeuferverband-faehige U-Laenge >= `total_desired`.
+    """Kleinste laeuferverband-faehige gerade Laenge >= `total_desired`.
 
-    Der Laeuferverband benoetigt total = k*Modul - Fuge (k ganze + halbe
-    Steine). Nur solche Laengen ergeben halbe Steine ausschliesslich an den
-    beiden freien Enden (Anfang/Ende der Seitenwaende).
+    Eine solche Laenge ist mit ganzen und halben Steinen sowie den Fugen
+    vollstaendig ohne Zuschnitt belegbar.
     """
     mod = _module(joint)
+    k = max(1, math.ceil((total_desired + joint) / mod))
+    return int(round(k * mod - joint))
+
+
+def _whole_run(total_desired: float, joint: float) -> int:
+    """Kleinste gerade Laenge, die nur aus ganzen Steinen besteht."""
+    mod = BRICK_L + joint
     k = max(1, math.ceil((total_desired + joint) / mod))
     return int(round(k * mod - joint))
 
@@ -53,24 +56,37 @@ def grate_options(
 ) -> list[tuple[int, int, int, int]]:
     """Rastertaugliche Rostgroessen (Breite, Tiefe, Innen-Breite, Innen-Tiefe).
 
-    Nur Rostgroessen, deren U-Lauf ohne Zuschnitt aufgeht (total ist ein
-    Vielfaches der Laeuferverband-Einheit). Sortiert nach Abstand zum Wunschmass.
+    Die geraden Wandabschnitte werden fuer einen wechselnden Eckverband
+    gerastert. Die Rueckwand und die Seitenwaende erhalten jeweils ganze
+    Steine an den Ecken; halbe Steine liegen nur an den freien Seitenenden.
     """
     iw_des = grate_width + 2 * clear
     id_des = grate_depth + clear
-    mod = _module(joint)
+
+    back_des = iw_des + 2 * WALL
+    back_lengths = {
+        _whole_run(value, joint)
+        for value in range(max(0, int(back_des) - window), int(back_des) + window + 1)
+    }
+    side_runs = {
+        _whole_run(value, joint)
+        for value in range(max(0, int(id_des) - window), int(id_des) + window + 1)
+    }
     options: list[tuple[int, int, int, int]] = []
-    for iw in range(max(0, int(iw_des) - window), int(iw_des) + window + 1):
-        for id_ in range(max(0, int(id_des) - window), int(id_des) + window + 1):
-            back_len = iw + 2 * WALL
-            side_len = id_ + WALL
-            total = 2 * side_len + back_len
-            if abs((total + joint) % mod) > 1e-9:
-                continue
+    for back_len in back_lengths:
+        iw = back_len - 2 * WALL
+        if back_len < 2 * (WALL + joint) + BRICK_L:
+            continue
+        for side_run in side_runs:
+            id_ = side_run
             gw, gd = iw - 2 * clear, id_ - clear
             if gw >= 200 and gd >= 200:
                 options.append((round(gw), round(gd), iw, id_))
-    options.sort(key=lambda o: abs(o[0] - grate_width) + abs(o[1] - grate_depth))
+    options.sort(key=lambda o: (
+        (o[0] < grate_width) + (o[1] < grate_depth),
+        abs(o[0] - grate_width) + abs(o[1] - grate_depth),
+        -o[0] - o[1],
+    ))
     return options[:max_options]
 
 
@@ -84,13 +100,13 @@ def actual_height(rows: int, joint: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Mauerzug der U-Form: eine durchgehende Steinfolge um beide Ecken
+# Steinbelegung der drei geraden Wandabschnitte
 # ---------------------------------------------------------------------------
 @dataclass
 class Stone:
     """Ein Stein im aufgewickelten 1D-Lauf des U-Mauerzugs.
 
-    pos    : Anfangsposition im 1D-Lauf (mm), 0 = linker vorderer Anfang.
+    pos    : Anfangsposition im gesamten U-Lauf (mm).
     length : Steinlaenge (240 = ganz, 115 = halb).
     is_half: True bei halbem Stein.
     wall   : 0 = linke Seitenwand, 1 = Rueckwand, 2 = rechte Seitenwand.
@@ -127,36 +143,38 @@ def _lay_straight(start_pos: float, start_with_half: bool, joint: float,
 
 
 def lay_course(total: float, start_with_half: bool, joint: float,
-              side_len: float, back_len: float) -> list[Stone]:
-    """Lege eine Lage als einen durchgehenden Laeuferverband um die U-Form.
+               side_len: float, back_len: float) -> list[Stone]:
+    """Lege eine Lage als wechselnden, ueberlappungsfreien Eckverband.
 
-    Der Mauerzug beginnt an Pos 0 an der Vorderkante der linken Seitenwand,
-    verlaeuft nach hinten bis Ecke 1 (pos = side_len), knickt um 90° in die
-    Rueckwand, verlaeuft bis Ecke 2 (pos = side_len + back_len), knickt um 90°
-    in die rechte Seitenwand und endet vorne bei pos = total.
-
-    Die ganze Lage ist EIN fortlaufender Verband (keine getrennten Waende).
-    `start_with_half` versetzt den Lauf um einen halben Stein: Lage A beginnt
-    mit einem ganzen Stein, Lage B mit einem halben. Weil `total` eine
-    Laeuferverband-Laenge ist, fallen halbe Steine ausschliesslich an den
-    freien Enden (Anfang der linken bzw. Ende der rechten Seitenwand) an.
-    An den Ecken sitzt automatisch je nach Versatz ein Stein der Seiten- oder
-    der Rueckwand.
+    In Lage A gehoeren die Ecken zur Rueckwand. In Lage B werden die
+    Seitensteine bis in die Ecken gefuehrt; die Rueckwand beginnt hinter einer
+    Fuge. `total` bleibt als Teil der bisherigen Funktionsschnittstelle
+    erhalten, ist fuer die lokale Belegung aber nicht erforderlich.
     """
-    spans, _ = _lay_straight(0.0, start_with_half, joint, total)
-
-    e1 = side_len
-    e2 = side_len + back_len
+    del total
+    corner_run = WALL + joint
     stones: list[Stone] = []
-    for (s, e, is_half) in spans:
-        center = s + (e - s) / 2
-        if center < e1:
-            wall = 0
-        elif center < e2:
-            wall = 1
-        else:
-            wall = 2
-        stones.append(Stone(pos=s, length=e - s, is_half=is_half, wall=wall))
+    if not start_with_half:
+        side_run = side_len
+        back_start = 0.0
+        back_run = back_len
+        left_spans, _ = _lay_straight(0.0, False, joint, side_run)
+        back_spans, _ = _lay_straight(back_start, False, joint, back_start + back_run)
+        right_spans, _ = _lay_straight(0.0, False, joint, side_run)
+    else:
+        side_run = side_len + corner_run
+        back_start = corner_run
+        back_run = back_len - 2 * corner_run
+        left_spans, _ = _lay_straight(0.0, True, joint, side_run)
+        back_spans, _ = _lay_straight(back_start, False, joint, back_start + back_run)
+        right_spans, _ = _lay_straight(0.0, False, joint, side_run)
+
+    stones.extend(Stone(pos=s, length=e - s, is_half=is_half, wall=0)
+                  for s, e, is_half in left_spans)
+    stones.extend(Stone(pos=s, length=e - s, is_half=is_half, wall=1)
+                  for s, e, is_half in back_spans)
+    stones.extend(Stone(pos=side_run - e, length=e - s, is_half=is_half, wall=2)
+                  for s, e, is_half in right_spans)
     return stones
 
 
@@ -221,35 +239,18 @@ def build_plan(
     inner_width_target = inner_width
     inner_depth_target = inner_depth
     outer_width_des = inner_width + 2 * WALL
-    outer_depth_des = inner_depth + WALL
 
-    # U-Lauf als einen durchgehenden Laeuferverband: die Gesamtlaenge
-    # total = 2*side_len + back_len muss eine Laeuferverband-Laenge sein
-    # (Vielfaches der Rastereinheit minus Fuge), damit halbe Steine nur an den
-    # freien Enden liegen. Aufteilung in ganzzahlige side_len/back_len waehlen,
-    # die der Wunschgroesse am naechsten kommen.
-    total_des = 2 * outer_depth_des + outer_width_des
-    total = clean_total(total_des, joint)
-
-    best: tuple[float, int, int] | None = None
-    for side_len in range(int(outer_depth_des) - 200, int(outer_depth_des) + 200):
-        back_len = total - 2 * side_len
-        if back_len < outer_width_des - 1e-9 or back_len < 0:
-            continue
-        if side_len < outer_depth_des - 1e-9:
-            continue
-        score = abs(side_len - outer_depth_des) + abs(back_len - outer_width_des)
-        if best is None or score < best[0]:
-            best = (score, side_len, back_len)
-    assert best is not None
-    _score, side_len, back_len = best
-    side_len = float(side_len)
-    back_len = float(back_len)
+    # Lage A bekommt die Ecken aus der Rueckwand. Dafuer muessen die geraden
+    # Seitenlaeufe und die volle Rueckwand nur aus ganzen Steinen bestehen.
+    side_run = float(_whole_run(inner_depth, joint))
+    back_len = float(_whole_run(outer_width_des, joint))
+    side_len = side_run + WALL
+    total = 2 * side_run + back_len
 
     course_a = lay_course(total, start_with_half=False, joint=joint,
-                          side_len=side_len, back_len=back_len)
+                          side_len=side_run, back_len=back_len)
     course_b = lay_course(total, start_with_half=True, joint=joint,
-                          side_len=side_len, back_len=back_len)
+                          side_len=side_run, back_len=back_len)
     ca_whole, ca_half = course_counts(course_a)
     cb_whole, cb_half = course_counts(course_b)
 
@@ -305,7 +306,9 @@ def plan_text(p: Plan) -> str:
         f"Gerundet auf Ziegelraster (Fuge {p.joint:.0f} mm):",
         f"  Rueckwand  ({p.back_len:.0f} mm aussen)",
         f"  Seitenwaende ({p.side_len:.0f} mm aussen, je 1x)",
-        f"  U-Lauf gesamt: {2 * p.side_len + p.back_len:.0f} mm",
+        f"  Lage A Wandabschnitte: {2 * (p.side_len - WALL) + p.back_len:.0f} mm",
+        f"  Lage B Seitenlauf: {p.side_len + p.joint:.0f} mm "
+        f"(inkl. {p.joint:.0f} mm Ueberstand)",
         "",
         "Tatsaechliche Masze:",
         f"  Aussen: {p.outer_width:.0f} x {p.outer_depth:.0f} mm (B x T)",
@@ -315,7 +318,7 @@ def plan_text(p: Plan) -> str:
         f"  Hoehe: {p.rows} Schichten = {p.height:.0f} mm "
         f"(Wunschhoehe {p.target_height:.0f} mm)",
         "",
-        "Steinbedarf (Laeuferverband um die Ecken, jede 2. Schicht versetzt):",
+        "Steinbedarf (wechselnder Eckverband, jede 2. Schicht versetzt):",
         f"  Lage A (ungerade Schichten): {p.course_a_whole} ganze + "
         f"{p.course_a_half} halbe",
         f"  Lage B (gerade Schichten):   {p.course_b_whole} ganze + "
@@ -325,10 +328,11 @@ def plan_text(p: Plan) -> str:
         f"  mit {p.reserve:.0f}% Reserve: {p.total_whole_res} ganze + "
         f"{p.total_half_res} halbe Steine ({p.total_res} Steine)",
         "",
-        "Die gesamte U-Form wird als EIN fortlaufender Laeuferverband gemauert.",
-        "Halbe Steine liegen nur an den freien Enden der Seitenwaende. An den",
-        "Ecken sitzt je nach Versatz automatisch ein Stein der Seiten- oder der",
-        "Rueckwand. Die Reserve bezieht sich auf ganze + halbe Steine.",
+        "In Lage A ueberdeckt die Rueckwand die beiden Ecken.",
+        "In Lage B laufen die Seitensteine durch die Ecken; die Rueckwand",
+        f"beginnt mit je {p.joint:.0f} mm Fuge. Es gibt keine Ueberlappung.",
+        "Halbe Steine liegen nur an den beiden freien Seitenenden.",
+        "Die Reserve bezieht sich auf ganze + halbe Steine.",
     ]
     return "\n".join(lines)
 

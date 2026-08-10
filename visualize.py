@@ -1,15 +1,9 @@
 """Visualisierung des Grillplans als echte 3D-Figur.
 
-Die Platzierung jeder Lage stammt aus `steingrill.lay_course`: Die Steine
-liegen als ein durchgehender Laeuferverband im 1D-Lauf der U-Form, der an den
-beiden Ecken um 90 Grad umknickt. Jeder Stein wird hier in seine 2D-Grundflaeche
-(Draufsicht) uebersetzt und dann als 3D-Box mit Hoehe `BRICK_H` gezeichnet.
-
-Eck-Steine, deren 1D-Lauf eine Ecke kreuzt, werden als gebogener (L-foermiger)
-Stein dargestellt, der die Ecke umgreift. Gerade Steine werden an den Ecken so
-beschnitten, dass sich nie zwei Steine ueberlappen. Aus den so entstehenden
-3D-Boxen werden drei orthografische Ansichten gerendert: von vorne, von der
-Seite und von oben.
+Die Platzierung jeder Lage stammt aus `steingrill.lay_course` als wechselnder
+Eckverband. Jeder Stein wird als genau ein rechteckiger NF-Stein in die
+2D-Grundflaeche (Draufsicht) uebersetzt. Auch ein Eckstein wird nicht in
+Teilflaechen zerlegt oder mit einem Nachbarstein ueberlagert.
 """
 
 from __future__ import annotations
@@ -17,7 +11,7 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from steingrill import BRICK_H, BRICK_L, BRICK_B, WALL, Plan, Stone
+from steingrill import BRICK_H, WALL, Plan, Stone
 
 GRATE_TH = 8
 BRICK_FACE = "#c96a4a"
@@ -35,113 +29,123 @@ VIEWS = [
 # ---------------------------------------------------------------------------
 # 1D-Lauf -> 2D-Grundflaechen (Draufsicht) einer Lage
 # ---------------------------------------------------------------------------
-def _course_rects(course: list[Stone], plan: Plan) -> list[tuple[float, float, float, float]]:
-    """Grundflaechen-Rechtecke (x, y, w, h) aller Steine einer Lage.
+def _course_rects_by_stone(
+    course: list[Stone], plan: Plan
+) -> list[tuple[Stone, list[tuple[float, float, float, float]]]]:
+    """Grundflaechen-Rechtecke (x, y, w, h) je Stein einer Lage.
 
-    Ursprung vorne links; die Rueckwand liegt hinten (y = inner_depth..outer_depth).
-    Der 1D-Lauf folgt der Aussenseite der U-Form:
-      - Wand 0 (links):  x in [0, WALL], y waechst von 0 nach side_len
-      - Wand 1 (hinten): y in [inner_depth, outer_depth], x waechst von 0 nach back_len
-      - Wand 2 (rechts): x in [outer_width-WALL, outer_width], y faellt nach 0
-
-    Ein Stein, dessen Lauf eine Ecke kreuzt (pos < Ecke, naechstes Zentrum an
-    der Ecke), wird als L-foermiger Eck-Stein gezeichnet und besitzt die
-    Eckflaeche. Gerade Steine werden an den Ecken so beschnitten, dass sich
-    nie zwei Steine ueberlappen.
+    Ursprung vorne links. In Lage A fuellt die Rueckwand die Eckquadrate. In
+    Lage B enden die Seitensteine erst hinter der Ecke; die Rueckwand beginnt
+    erst nach einer Fuge. Dadurch gibt es weder Ueberlagerungen noch
+    geometrisch erzeugte Teilflaechen.
     """
-    e1 = plan.side_len
-    e2 = plan.side_len + plan.back_len
-    total = 2 * plan.side_len + plan.back_len
-    ow = plan.outer_width
-    iw = plan.inner_depth
-    bl = plan.back_len
-
-    def _wrapper(corner: float) -> Stone | None:
-        best: Stone | None = None
-        best_gap = float("inf")
-        for st in course:
-            if st.pos < corner:
-                gap = abs(st.pos + st.length / 2 - corner)
-                if gap < best_gap:
-                    best, best_gap = st, gap
-        return best
-
-    wrap_c1 = _wrapper(e1)
-    wrap_c2 = _wrapper(e2)
-
-    rects: list[tuple[float, float, float, float]] = []
+    side_run = plan.side_len - WALL
+    inner_depth = side_run
+    by_stone: list[tuple[Stone, list[tuple[float, float, float, float]]]] = []
     for st in course:
-        s, e = st.pos, st.pos + st.length
-        if st is wrap_c1:
-            # Eck-Stein an Ecke 1: laeuft an der linken Wand bis zur Ecke
-            # und knickt in die Rueckwand um.
-            rects.append((0.0, min(s, iw), float(WALL), e1 - min(s, iw)))
-            if e > e1:
-                rects.append((0.0, iw, e - e1, float(WALL)))
-            continue
-        if st is wrap_c2:
-            # Eck-Stein an Ecke 2: laeuft an der Rueckwand bis zur Ecke und
-            # knickt in die rechte Seitenwand um.
-            rects.append((min(s - e1, ow - WALL), iw, bl - min(s - e1, ow - WALL), float(WALL)))
-            if e > e2:
-                rects.append((ow - WALL, total - e, float(WALL), e - e2))
-            continue
         if st.wall == 0:
-            y1 = min(e, iw)
-            if y1 > s:
-                rects.append((0.0, s, float(WALL), y1 - s))
+            rects = [(0.0, st.pos, float(WALL), st.length)]
         elif st.wall == 1:
-            # Rueckwand: die Eckflaechen (x<WALL und x>ow-WALL) gehoeren den
-            # Eck-Steinen, daher an beiden Enden bescheiden.
-            x0 = max(s - e1, float(WALL))
-            x1 = min(e - e1, ow - WALL)
-            if x1 > x0:
-                rects.append((x0, iw, x1 - x0, float(WALL)))
+            y = inner_depth
+            rects = [(st.pos, y, st.length, float(WALL))]
         else:
-            y0 = total - e
-            y1 = min(total - s, iw)
-            if y1 > y0:
-                rects.append((ow - WALL, y0, float(WALL), y1 - y0))
-    return rects
+            rects = [(plan.outer_width - WALL, st.pos, float(WALL), st.length)]
+        by_stone.append((st, rects))
+    return by_stone
+
+
+def _course_rects(course: list[Stone], plan: Plan) -> list[tuple[float, float, float, float]]:
+    """Alle Grundflaechen-Rechtecke einer Lage (flach, ohne Stein-Zuordnung)."""
+    return [r for _, rects in _course_rects_by_stone(course, plan) for r in rects]
+
+
+def _merge_rects(rects: list[tuple[float, float, float, float]]) -> list[tuple[float, float]]:
+    """Vereinigt achsenparallele Rechtecke zu einem einfachen Polygon (x, y).
+
+    Die Funktion bleibt als gemeinsame Polygon-Aufbereitung erhalten; die
+    aktuelle Planung liefert pro Stein jedoch bereits genau ein Rechteck.
+    """
+    xs = sorted({round(r[0], 6) for r in rects} | {round(r[0] + r[2], 6) for r in rects})
+    ys = sorted({round(r[1], 6) for r in rects} | {round(r[1] + r[3], 6) for r in rects})
+    nx, ny = len(xs) - 1, len(ys) - 1
+    cov = [[False] * nx for _ in range(ny)]
+    for x0, y0, w, h in rects:
+        i0 = xs.index(round(x0, 6))
+        i1 = xs.index(round(x0 + w, 6))
+        j0 = ys.index(round(y0, 6))
+        j1 = ys.index(round(y0 + h, 6))
+        for j in range(j0, j1):
+            for i in range(i0, i1):
+                cov[j][i] = True
+    edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for j in range(ny):
+        for i in range(nx):
+            if not cov[j][i]:
+                continue
+            if j == 0 or not cov[j - 1][i]:
+                edges.append(((i, j), (i + 1, j)))
+            if j == ny - 1 or not cov[j + 1][i]:
+                edges.append(((i + 1, j + 1), (i, j + 1)))
+            if i == 0 or not cov[j][i - 1]:
+                edges.append(((i, j + 1), (i, j)))
+            if i == nx - 1 or not cov[j][i + 1]:
+                edges.append(((i + 1, j), (i + 1, j + 1)))
+    out_next = {e[0]: e[1] for e in edges}
+    start = edges[0][0]
+    raw = [(xs[start[0]], ys[start[1]])]
+    cur = start
+    while True:
+        cur = out_next[cur]
+        if cur == start:
+            break
+        raw.append((xs[cur[0]], ys[cur[1]]))
+    poly = []
+    n = len(raw)
+    for i in range(n):
+        a, b, c = raw[i - 1], raw[i], raw[(i + 1) % n]
+        cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        if abs(cross) > 1e-6:
+            poly.append(b)
+    return poly
 
 
 # ---------------------------------------------------------------------------
-# 3D-Boxen fuer den gesamten Plan
+# 3D-Prismen fuer den gesamten Plan
 # ---------------------------------------------------------------------------
-def _plan_boxes(plan: Plan) -> list[tuple[float, float, float, float, float, float]]:
-    """Alle Steine des Plans als 3D-Boxen (x, y, z, w, h, d)."""
-    boxes: list[tuple[float, float, float, float, float, float]] = []
+def _plan_polys(plan: Plan) -> list[tuple[list[tuple[float, float]], float]]:
+    """Alle Steine des Plans als (Grundflaechen-Polygon, z0)-Paare.
+
+    Jeder Stein ist ein einzelnes Rechteck. _merge_rects bleibt als kleine
+    gemeinsame Polygon-Aufbereitung erhalten, erzeugt aber keine Eckformen.
+    """
+    polys: list[tuple[list[tuple[float, float]], float]] = []
     for r in range(plan.rows):
         course = plan.course_b if r % 2 == 1 else plan.course_a
         z0 = r * (BRICK_H + plan.joint)
-        for (x0, y0, w, h) in _course_rects(course, plan):
-            boxes.append((x0, y0, z0, w, h, BRICK_H))
-    return boxes
+        for _, rects in _course_rects_by_stone(course, plan):
+            polys.append((_merge_rects(rects), z0))
+    return polys
 
 
 # ---------------------------------------------------------------------------
-# Rendern einer 3D-Box
+# Rendern eines 3D-Prinmas aus einem Grundflaechen-Polygon
 # ---------------------------------------------------------------------------
-def _box_faces(x: float, y: float, z: float, w: float, h: float, d: float):
-    """Liefert die sechs Seitenflaechen einer Box als Listen von Ecken."""
-    pts = [
-        (x, y, z), (x, y, z + d), (x + w, y, z + d), (x + w, y, z),       # y=y
-        (x, y, z), (x, y + h, z), (x + w, y + h, z), (x + w, y, z),       # z=z
-    ]
-    faces = [
-        [pts[0], pts[1], pts[2], pts[3]],  # vorne  (y = y)
-        [pts[4], pts[5], pts[6], pts[7]],  # unten  (z = z)
-        [(x, y + h, z), (x, y + h, z + d), (x + w, y + h, z + d), (x + w, y + h, z)],  # hinten
-        [(x, y, z), (x, y + h, z), (x, y + h, z + d), (x, y, z + d)],     # links
-        [(x + w, y, z), (x + w, y + h, z), (x + w, y + h, z + d), (x + w, y, z + d)],  # rechts
-        [(x, y, z + d), (x, y + h, z + d), (x + w, y + h, z + d), (x + w, y, z + d)],  # oben
-    ]
+def _prism_faces(poly: list[tuple[float, float]], z: float, d: float):
+    """Liefert die Seitenflaechen eines vertikal extrudierten Polygons."""
+    top = [(x, y, z + d) for x, y in poly]
+    bottom = [(x, y, z) for x, y in poly]
+    faces = [bottom, top]
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        faces.append([(x0, y0, z), (x1, y1, z), (x1, y1, z + d), (x0, y0, z + d)])
     return faces
 
 
-def _plot_boxes(ax, boxes: list) -> None:
-    for (x0, y0, z0, w, h, d) in boxes:
-        faces = _box_faces(x0, y0, z0, w, h, d)
+def _plot_boxes(ax, polys: list) -> None:
+    for poly, z0 in polys:
+        faces = _prism_faces(poly, z0, BRICK_H)
         col = Poly3DCollection(faces, facecolor=BRICK_FACE, edgecolor=BRICK_EDGE, lw=0.4)
         ax.add_collection3d(col)
 
@@ -165,12 +169,12 @@ def _set_axes_equal(ax) -> None:
 
 
 def show_plan(plan: Plan, save_path: str | None = None) -> None:
-    boxes = _plan_boxes(plan)
+    polys = _plan_polys(plan)
 
     fig = plt.figure(figsize=(19, 6))
     for i, (elev, azim, title) in enumerate(VIEWS, start=1):
         ax = fig.add_subplot(1, 3, i, projection="3d")
-        _plot_boxes(ax, boxes)
+        _plot_boxes(ax, polys)
         ax.set_xlim3d(-20, plan.outer_width + 20)
         ax.set_ylim3d(-20, plan.outer_depth + 20)
         ax.set_zlim3d(-20, plan.height + 20)
