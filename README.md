@@ -38,7 +38,10 @@ ausgegeben.
 - Wandstärke 115 mm (halber Stein), offene U-Form
 - Die Grundplatte wird als vorhanden angenommen und nicht mitgemauert
 - Läuferverband: jede zweite Schicht (Lage B) ist um einen halben Stein
-  versetzt und benötigt daher halbe Steine an den Lagenenden
+  versetzt; halbe Steine liegen an den vorderen Seitenwandenden sowie bei
+  Bedarf am Anfang der Rückwand. Dadurch liegen die Rückwandfugen der
+  benachbarten Lagen versetzt; pro Planung werden dafür 20 Belegungen
+  verglichen.
 - Innenmaß = Rostmaß + Spielraum; die Maße werden auf das Ziegelraster
   (Fuge 10 mm -> 250er-Modul, mit Halbsteinen 125er-Feinraster) gerundet,
   sodass keine Steine geschnitten werden müssen

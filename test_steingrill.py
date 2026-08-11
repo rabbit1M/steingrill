@@ -23,7 +23,7 @@ def test_num_rows():
     assert actual_height(6, 10) == 476
 
 
-def test_grate_options_rasterize_whole_corner_runs():
+def test_grate_options_rasterize_half_brick_runs():
     options = grate_options(400, 400, clear=10, joint=10)
     assert options
     for _gw, _gd, inner_width, inner_depth in options:
@@ -93,12 +93,55 @@ def test_grate_height_is_configurable():
     assert build_plan(400, 400, 400, grate_height=275).grate_height == 275
 
 
-def test_grate_options_include_half_brick_width_variant():
+def test_grate_options_distribute_back_halves():
     options = grate_options(600, 300, clear=10, joint=10)
-    option = next(option for option in options if 350 <= option[0] <= 370)
+    option = next(option for option in options if 350 <= option[1] <= 370)
     plan = build_plan(
         option[0], option[1], 400, clear=10, joint=10,
         inner_width=option[2], inner_depth=option[3],
     )
     assert plan.outer_width == option[2] + 2 * 115
     assert plan.inner_width == option[2]
+    back_joint_counts = {}
+    back_half_starts = []
+    for course in plan.courses:
+        back_halves = [stone for stone in course if stone.wall == 1 and stone.is_half]
+        assert len(back_halves) <= 1
+        if back_halves:
+            back_half_starts.append(back_halves[0].pos)
+        back_stones = sorted(
+            (stone for stone in course if stone.wall == 1),
+            key=lambda stone: stone.pos,
+        )
+        for position in {
+            round((left.pos + left.length + right.pos) / 2, 6)
+            for left, right in zip(back_stones, back_stones[1:])
+        }:
+            back_joint_counts[position] = back_joint_counts.get(position, 0) + 1
+        assert all(
+            stone.pos == 0
+            for stone in course
+            if stone.is_half and stone.wall in (0, 2)
+        )
+    assert max(back_joint_counts.values()) < len(plan.courses)
+    assert len(set(back_half_starts)) > 1
+
+
+def test_reported_back_wall_has_staggered_joints():
+    option = next(option for option in grate_options(600, 400, 10, 10)
+                  if option[:2] == (615, 490))
+    plan = build_plan(
+        option[0], option[1], 400, clear=10, joint=10,
+        inner_width=option[2], inner_depth=option[3],
+    )
+
+    joint_counts = {}
+    for course in plan.courses:
+        back = sorted((stone for stone in course if stone.wall == 1),
+                      key=lambda stone: stone.pos)
+        for position in {
+            round((left.pos + left.length + right.pos) / 2, 6)
+            for left, right in zip(back, back[1:])
+        }:
+            joint_counts[position] = joint_counts.get(position, 0) + 1
+    assert max(joint_counts.values()) < len(plan.courses)

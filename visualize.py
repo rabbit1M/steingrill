@@ -120,8 +120,7 @@ def _plan_polys(plan: Plan) -> list[tuple[list[tuple[float, float]], float]]:
     gemeinsame Polygon-Aufbereitung erhalten, erzeugt aber keine Eckformen.
     """
     polys: list[tuple[list[tuple[float, float]], float]] = []
-    for r in range(plan.rows):
-        course = plan.course_b if r % 2 == 1 else plan.course_a
+    for r, course in enumerate(plan.courses):
         z0 = r * (BRICK_H + plan.joint)
         for _, rects in _course_rects_by_stone(course, plan):
             polys.append((_merge_rects(rects), z0))

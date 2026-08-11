@@ -3,13 +3,15 @@
 Die drei Waende (linke Seitenwand, Rueckwand, rechte Seitenwand) werden als
 wechselnder Eckverband geplant. In jeder Lage bleiben die Steine rechteckig;
 die Ecke gehoert abwechselnd der Rueckwand oder den Seitenwaenden. Halbe
-Steine liegen nur an den beiden freien Seitenenden.
+Steine liegen an den freien Seitenenden und bei Bedarf am Anfang der
+Rueckwandlage, damit die Fugen der benachbarten Lagen versetzt sind.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass
 
 # Normalformat (NF) in mm
 BRICK_L = 240
@@ -48,6 +50,33 @@ def _whole_run(total_desired: float, joint: float) -> int:
     return int(round(k * mod - joint))
 
 
+def _starts_with_half(total: float, joint: float) -> bool:
+    """Ob ein Rasterlauf vorne mit einem Halbstein beginnen muss."""
+    modules = round((total + joint) / _module(joint))
+    return modules % 2 == 1
+
+
+def _lay_back(start: float, total: float, joint: float,
+              half_index: int | None) -> tuple[list[tuple[float, float, bool]], float]:
+    """Lege eine Rueckwand mit kontrolliert gesetztem Halbstein."""
+    modules = round((total + joint) / _module(joint))
+    if modules % 2 == 0:
+        return _lay_straight(start, False, joint, start + total)
+
+    whole_count = (modules - 1) // 2
+    if half_index is None:
+        half_index = 0
+    lengths = [BRICK_L] * whole_count
+    lengths.insert(half_index, HALF_BRICK_L)
+
+    spans: list[tuple[float, float, bool]] = []
+    pos = start
+    for length in lengths:
+        spans.append((pos, pos + length, length == HALF_BRICK_L))
+        pos += length + joint
+    return spans, pos
+
+
 def grate_options(
     grate_width: float,
     grate_depth: float,
@@ -58,9 +87,9 @@ def grate_options(
 ) -> list[tuple[int, int, int, int]]:
     """Rastertaugliche Rostgroessen (Breite, Tiefe, Innen-Breite, Innen-Tiefe).
 
-    Die geraden Wandabschnitte werden fuer einen wechselnden Eckverband auf
-    das Halbsteinraster gerastert. Ganze und halbe Steine liegen dabei an den
-    jeweiligen Rasterenden, ohne dass Steine zugeschnitten werden muessen.
+    Die Wandlaengen werden fuer einen wechselnden Eckverband auf das
+    Halbsteinraster gerastert. Halbsteine in der Rueckwand werden pro Lage
+    versetzt, damit keine durchgehende senkrechte Fuge entsteht.
     """
     iw_des = grate_width + 2 * clear
     id_des = grate_depth + clear
@@ -159,7 +188,8 @@ def _lay_straight(start_pos: float, start_with_half: bool, joint: float,
 
 
 def lay_course(total: float, start_with_half: bool, joint: float,
-               side_len: float, back_len: float) -> list[Stone]:
+               side_len: float, back_len: float,
+               back_half_index: int | None = None) -> list[Stone]:
     """Lege eine Lage als wechselnden, ueberlappungsfreien Eckverband.
 
     In Lage A gehoeren die Ecken zur Rueckwand. In Lage B werden die
@@ -174,15 +204,17 @@ def lay_course(total: float, start_with_half: bool, joint: float,
         side_run = side_len
         back_start = 0.0
         back_run = back_len
-        left_spans, _ = _lay_straight(0.0, False, joint, side_run)
-        back_spans, _ = _lay_straight(back_start, False, joint, back_start + back_run)
+        side_front_half = _starts_with_half(side_run, joint)
+        left_spans, _ = _lay_straight(0.0, side_front_half, joint, side_run)
+        back_spans, _ = _lay_back(back_start, back_run, joint, back_half_index)
         right_spans, _ = _lay_straight(0.0, False, joint, side_run)
     else:
         side_run = side_len + corner_run
         back_start = corner_run
         back_run = back_len - 2 * corner_run
-        left_spans, _ = _lay_straight(0.0, True, joint, side_run)
-        back_spans, _ = _lay_straight(back_start, False, joint, back_start + back_run)
+        side_front_half = _starts_with_half(side_run, joint)
+        left_spans, _ = _lay_straight(0.0, side_front_half, joint, side_run)
+        back_spans, _ = _lay_back(back_start, back_run, joint, back_half_index)
         right_spans, _ = _lay_straight(0.0, False, joint, side_run)
 
     stones.extend(Stone(pos=s, length=e - s, is_half=is_half, wall=0)
@@ -199,6 +231,27 @@ def course_counts(stones: list[Stone]) -> tuple[int, int]:
     whole = sum(1 for st in stones if not st.is_half)
     half = sum(1 for st in stones if st.is_half)
     return whole, half
+
+
+def _back_joint_positions(course: list[Stone]) -> set[float]:
+    """Positionen der Fugenmitten innerhalb der Rueckwand einer Lage."""
+    back = sorted((stone for stone in course if stone.wall == 1),
+                  key=lambda stone: stone.pos)
+    return {
+        round((left.pos + left.length + right.pos) / 2, 6)
+        for left, right in zip(back, back[1:])
+    }
+
+
+def _back_layout_score(courses: list[list[Stone]]) -> tuple[int, int]:
+    """Bewerte durchgehende und mehrfach uebereinanderliegende Rueckwandfugen."""
+    counts: dict[float, int] = {}
+    for course in courses:
+        for position in _back_joint_positions(course):
+            counts[position] = counts.get(position, 0) + 1
+    max_count = max(counts.values(), default=0)
+    pair_overlaps = sum(count * (count - 1) // 2 for count in counts.values())
+    return max_count, pair_overlaps
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +281,7 @@ class Plan:
     # Lage B beginnt mit einem halben Stein (gerade Schichten, versetzt).
     course_a: list  # list[Stone] fuer Lage A
     course_b: list  # list[Stone] fuer Lage B
+    courses: list  # individuelle Belegung jeder Schicht
     course_a_whole: int
     course_a_half: int
     course_b_whole: int
@@ -268,17 +322,57 @@ def build_plan(
     side_len = side_run + joint + WALL
     total = 2 * side_run + back_len
 
-    course_a = lay_course(total, start_with_half=False, joint=joint,
-                          side_len=side_run, back_len=back_len)
-    course_b = lay_course(total, start_with_half=True, joint=joint,
-                          side_len=side_run, back_len=back_len)
+    rows = num_rows(target_height, joint)
+    height = actual_height(rows, joint)
+
+    back_choices: list[list[int | None]] = []
+    for row in range(rows):
+        is_b = row % 2 == 1
+        back_run = back_len - 2 * (WALL + joint) if is_b else back_len
+        modules = round((back_run + joint) / _module(joint))
+        if modules % 2:
+            back_choices.append(list(range((modules - 1) // 2 + 1)))
+        else:
+            back_choices.append([None])
+
+    def make_courses(half_indices: list[int | None]) -> list[list[Stone]]:
+        return [
+            lay_course(
+                total,
+                start_with_half=row % 2 == 1,
+                joint=joint,
+                side_len=side_run,
+                back_len=back_len,
+                back_half_index=half_index,
+            )
+            for row, half_index in enumerate(half_indices)
+        ]
+
+    # Eine Variante mit wechselnden Randpositionen stellt sicher, dass auch
+    # bei unguenstigen Zufallswerten keine starre Fugenlinie entsteht.
+    fallback_indices = [
+        choices[0] if row // 2 % 2 == 0 else choices[-1]
+        for row, choices in enumerate(back_choices)
+    ]
+    rng = random.Random()
+    best_courses = make_courses(fallback_indices)
+    best_score = _back_layout_score(best_courses)
+    for _ in range(19):
+        half_indices = [rng.choice(choices) for choices in back_choices]
+        candidate = make_courses(half_indices)
+        score = _back_layout_score(candidate)
+        if score < best_score or (score == best_score and rng.random() < 0.5):
+            best_courses = candidate
+            best_score = score
+    courses = best_courses
+
+    course_a = courses[0]
+    course_b = courses[1] if rows > 1 else courses[0]
     ca_whole, ca_half = course_counts(course_a)
     cb_whole, cb_half = course_counts(course_b)
 
     outer_width = back_len
     outer_depth = side_len
-    rows = num_rows(target_height, joint)
-    height = actual_height(rows, joint)
 
     cycles, remainder = divmod(rows, 2)
     total_whole = cycles * (ca_whole + cb_whole) + remainder * ca_whole
@@ -307,6 +401,7 @@ def build_plan(
         height=height,
         course_a=course_a,
         course_b=course_b,
+        courses=courses,
         course_a_whole=ca_whole,
         course_a_half=ca_half,
         course_b_whole=cb_whole,
@@ -351,11 +446,13 @@ def plan_text(p: Plan) -> str:
         f"{p.total_half} halbe Steine",
         f"  mit {p.reserve:.0f}% Reserve: {p.total_whole_res} ganze + "
         f"{p.total_half_res} halbe Steine ({p.total_res} Steine)",
+        "  Rueckwand: 20 Belegungen bewertet, beste Fugenverteilung gewaehlt.",
         "",
         "In Lage A ueberdeckt die Rueckwand die beiden Ecken.",
         "In Lage B laufen die Seitensteine durch die Ecken; die Rueckwand",
         f"beginnt mit je {p.joint:.0f} mm Fuge. Es gibt keine Ueberlappung.",
-        "Halbe Steine liegen an den Rasterenden der Wandabschnitte.",
+        "Halbe Steine liegen an den vorderen Seitenwandenden; in der Rueckwand",
+        "werden sie lagenweise versetzt, damit keine durchgehende Fuge entsteht.",
         "Die Reserve bezieht sich auf ganze + halbe Steine.",
     ]
     return "\n".join(lines)
