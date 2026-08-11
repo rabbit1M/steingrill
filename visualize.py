@@ -14,15 +14,15 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from steingrill import BRICK_H, WALL, Plan, Stone
 
 GRATE_TH = 8
+GRATE_SPACING = 20
 BRICK_FACE = "#c96a4a"
 BRICK_EDGE = "#5a2d1a"
 GRATE_COLOR = "#333333"
 
-# Ansichten: (Hoehenwinkel, Azimut, Titel)
+# Eine schräge Ansicht: (Hoehenwinkel, Azimut, Titel).
+# Azimut -45 liegt 45 Grad zwischen Vorderansicht (-90) und Seitenansicht (0).
 VIEWS = [
-    (8, -90, "Vorderansicht"),
-    (8, 0, "Seitenansicht"),
-    (90, -90, "Draufsicht"),
+    (45, -45, "Schraege Ansicht"),
 ]
 
 
@@ -34,10 +34,11 @@ def _course_rects_by_stone(
 ) -> list[tuple[Stone, list[tuple[float, float, float, float]]]]:
     """Grundflaechen-Rechtecke (x, y, w, h) je Stein einer Lage.
 
-    Ursprung vorne links. In Lage A fuellt die Rueckwand die Eckquadrate. In
-    Lage B enden die Seitensteine erst hinter der Ecke; die Rueckwand beginnt
-    erst nach einer Fuge. Dadurch gibt es weder Ueberlagerungen noch
-    geometrisch erzeugte Teilflaechen.
+    Ursprung vorne links. In Lage A gehoeren die Eckquadrate zur Rueckwand;
+    zwischen Rueckwand und Seitensteinen bleibt die Fuge sichtbar. In Lage B
+    enden die Seitensteine erst hinter der Ecke; die Rueckwand beginnt erst
+    nach einer Fuge. Dadurch gibt es weder Ueberlagerungen noch geometrisch
+    erzeugte Teilflaechen.
     """
     side_run = plan.side_len - WALL
     inner_depth = side_run
@@ -113,7 +114,7 @@ def _merge_rects(rects: list[tuple[float, float, float, float]]) -> list[tuple[f
 # 3D-Prismen fuer den gesamten Plan
 # ---------------------------------------------------------------------------
 def _plan_polys(plan: Plan) -> list[tuple[list[tuple[float, float]], float]]:
-    """Alle Steine des Plans als (Grundflaechen-Polygon, z0)-Paare.
+    """Alle Steine als (Grundflaechen-Polygon, z0)-Paare.
 
     Jeder Stein ist ein einzelnes Rechteck. _merge_rects bleibt als kleine
     gemeinsame Polygon-Aufbereitung erhalten, erzeugt aber keine Eckformen.
@@ -143,11 +144,59 @@ def _prism_faces(poly: list[tuple[float, float]], z: float, d: float):
     return faces
 
 
-def _plot_boxes(ax, polys: list) -> None:
+def _plot_boxes(ax, polys: list, grate_faces: list[list[tuple[float, float, float]]]) -> None:
+    def add_body(faces: list, facecolor: str, edgecolors: list) -> None:
+        ax.add_collection3d(
+            Poly3DCollection(
+                faces,
+                facecolor=facecolor,
+                edgecolor=edgecolors,
+                lw=0.4,
+                zsort="max",
+            )
+        )
+
     for poly, z0 in polys:
-        faces = _prism_faces(poly, z0, BRICK_H)
-        col = Poly3DCollection(faces, facecolor=BRICK_FACE, edgecolor=BRICK_EDGE, lw=0.4)
-        ax.add_collection3d(col)
+        brick_faces = _prism_faces(poly, z0, BRICK_H)
+        # mplot3d besitzt keinen echten Tiefenpuffer. Kanten horizontaler
+        # Flaechen koennen deshalb durch einen darueberliegenden Stein
+        # erscheinen. Die seitlichen Kanten bleiben als Fugenlinien sichtbar.
+        edgecolors = [(0, 0, 0, 0), (0, 0, 0, 0)]
+        edgecolors.extend([BRICK_EDGE] * (len(brick_faces) - 2))
+        add_body(brick_faces, BRICK_FACE, edgecolors)
+
+    # Jeder Rostkoerper wird ebenfalls separat sortiert. So kann ein vorderer
+    # Ziegel den Rost verdecken, ohne dass der Rost global hinter allen
+    # Ziegeln liegt.
+    for grate_part in grate_faces:
+        add_body(grate_part, GRATE_COLOR, [GRATE_COLOR] * len(grate_part))
+
+
+def _grate_faces(plan: Plan) -> list[list[tuple[float, float, float]]]:
+    """Liefert Rahmen und Staebe des Rosts als duenne 3D-Koerper."""
+    x0 = (plan.outer_width - plan.grate_width) / 2
+    x1 = x0 + plan.grate_width
+    y0 = 0.0
+    y1 = plan.grate_depth
+
+    parts = [
+        (x0, y0, plan.grate_width, GRATE_TH),
+        (x0, y1 - GRATE_TH, plan.grate_width, GRATE_TH),
+        (x0, y0, GRATE_TH, plan.grate_depth),
+        (x1 - GRATE_TH, y0, GRATE_TH, plan.grate_depth),
+    ]
+    for i in range(1, int(plan.grate_depth / GRATE_SPACING)):
+        y = y0 + i * GRATE_SPACING
+        parts.append((x0, y - GRATE_TH / 2, plan.grate_width, GRATE_TH))
+
+    return [
+        _prism_faces(
+            [(x, y), (x + width, y), (x + width, y + depth), (x, y + depth)],
+            plan.grate_height,
+            GRATE_TH,
+        )
+        for x, y, width, depth in parts
+    ]
 
 
 def _set_axes_equal(ax) -> None:
@@ -171,10 +220,11 @@ def _set_axes_equal(ax) -> None:
 def show_plan(plan: Plan, save_path: str | None = None) -> None:
     polys = _plan_polys(plan)
 
-    fig = plt.figure(figsize=(19, 6))
+    fig = plt.figure(figsize=(9, 8))
     for i, (elev, azim, title) in enumerate(VIEWS, start=1):
-        ax = fig.add_subplot(1, 3, i, projection="3d")
-        _plot_boxes(ax, polys)
+        ax = fig.add_subplot(1, 1, i, projection="3d")
+        ax.computed_zorder = True
+        _plot_boxes(ax, polys, _grate_faces(plan))
         ax.set_xlim3d(-20, plan.outer_width + 20)
         ax.set_ylim3d(-20, plan.outer_depth + 20)
         ax.set_zlim3d(-20, plan.height + 20)

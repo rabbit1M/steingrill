@@ -8,12 +8,11 @@ from steingrill import (
     grate_options,
     num_rows,
     actual_height,
-    _whole_run,
 )
 from visualize import _course_rects_by_stone
 
 
-def test_clean_total_uses_only_brick_raster():
+def test_clean_total_uses_half_brick_raster():
     assert clean_total(240, 10) == 240
     assert clean_total(241, 10) == 365
     assert clean_total(490, 10) == 490
@@ -28,8 +27,8 @@ def test_grate_options_rasterize_whole_corner_runs():
     options = grate_options(400, 400, clear=10, joint=10)
     assert options
     for _gw, _gd, inner_width, inner_depth in options:
-        assert _whole_run(inner_width + 2 * 115, 10) == inner_width + 2 * 115
-        assert _whole_run(inner_depth, 10) == inner_depth
+        assert clean_total(inner_width + 2 * 115, 10) == inner_width + 2 * 115
+        assert clean_total(inner_depth - 10, 10) + 10 == inner_depth
 
 
 def test_example_has_no_corner_special_sizes():
@@ -44,8 +43,8 @@ def test_example_has_no_corner_special_sizes():
         inner_depth=429,
     )
 
-    assert (plan.outer_width, plan.outer_depth) == (740, 605)
-    assert (plan.inner_width, plan.inner_depth) == (510, 490)
+    assert (plan.outer_width, plan.outer_depth) == (740, 615)
+    assert (plan.inner_width, plan.inner_depth) == (510, 500)
     assert (plan.course_a_whole, plan.course_a_half) == (7, 0)
     assert (plan.course_b_whole, plan.course_b_half) == (6, 2)
 
@@ -68,7 +67,38 @@ def test_example_has_no_corner_special_sizes():
                 assert x_disjoint or y_disjoint
 
 
+def test_corner_joint_between_side_and_back_wall():
+    plan = build_plan(400, 400, 400, inner_width=422, inner_depth=429)
+    side_stones = [st for st in plan.course_a if st.wall == 0]
+    side_end = max(st.pos + st.length for st in side_stones)
+    back_start = next(
+        rect[1]
+        for st, rects in _course_rects_by_stone(plan.course_a, plan)
+        if st.wall == 1
+        for rect in rects
+    )
+
+    assert side_end == 490
+    assert back_start - side_end == plan.joint
+
+
 def test_build_plan_reserve():
     plan = build_plan(400, 400, 400, reserve=0)
     assert plan.total_whole_res == plan.total_whole
     assert plan.total_half_res == plan.total_half
+
+
+def test_grate_height_is_configurable():
+    assert build_plan(400, 400, 400).grate_height == 150
+    assert build_plan(400, 400, 400, grate_height=275).grate_height == 275
+
+
+def test_grate_options_include_half_brick_width_variant():
+    options = grate_options(600, 300, clear=10, joint=10)
+    option = next(option for option in options if 350 <= option[0] <= 370)
+    plan = build_plan(
+        option[0], option[1], 400, clear=10, joint=10,
+        inner_width=option[2], inner_depth=option[3],
+    )
+    assert plan.outer_width == option[2] + 2 * 115
+    assert plan.inner_width == option[2]

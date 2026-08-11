@@ -18,6 +18,7 @@ BRICK_H = 71
 HALF_BRICK_L = 115
 # Wandstaerke: halber Stein (Laeuferverband)
 WALL = 115
+DEFAULT_GRATE_HEIGHT = 150.0
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +33,8 @@ def clean_total(total_desired: float, joint: float) -> int:
     """Kleinste laeuferverband-faehige gerade Laenge >= `total_desired`.
 
     Eine solche Laenge ist mit ganzen und halben Steinen sowie den Fugen
-    vollstaendig ohne Zuschnitt belegbar.
+    vollstaendig ohne Zuschnitt belegbar. Das Raster umfasst deshalb ein
+    Halbsteinmodul inklusive Fuge.
     """
     mod = _module(joint)
     k = max(1, math.ceil((total_desired + joint) / mod))
@@ -51,25 +53,25 @@ def grate_options(
     grate_depth: float,
     clear: float,
     joint: float,
-    window: int = 200,
-    max_options: int = 8,
+    window: int = 250,
+    max_options: int = 12,
 ) -> list[tuple[int, int, int, int]]:
     """Rastertaugliche Rostgroessen (Breite, Tiefe, Innen-Breite, Innen-Tiefe).
 
-    Die geraden Wandabschnitte werden fuer einen wechselnden Eckverband
-    gerastert. Die Rueckwand und die Seitenwaende erhalten jeweils ganze
-    Steine an den Ecken; halbe Steine liegen nur an den freien Seitenenden.
+    Die geraden Wandabschnitte werden fuer einen wechselnden Eckverband auf
+    das Halbsteinraster gerastert. Ganze und halbe Steine liegen dabei an den
+    jeweiligen Rasterenden, ohne dass Steine zugeschnitten werden muessen.
     """
     iw_des = grate_width + 2 * clear
     id_des = grate_depth + clear
 
     back_des = iw_des + 2 * WALL
     back_lengths = {
-        _whole_run(value, joint)
+        clean_total(value, joint)
         for value in range(max(0, int(back_des) - window), int(back_des) + window + 1)
     }
     side_runs = {
-        _whole_run(value, joint)
+        clean_total(value, joint)
         for value in range(max(0, int(id_des) - window), int(id_des) + window + 1)
     }
     options: list[tuple[int, int, int, int]] = []
@@ -78,7 +80,9 @@ def grate_options(
         if back_len < 2 * (WALL + joint) + BRICK_L:
             continue
         for side_run in side_runs:
-            id_ = side_run
+            # Zwischen Seitenlauf und Rueckwand liegt an beiden Ecken eine
+            # Fuge. `id_` ist deshalb die lichte Tiefe hinter dieser Fuge.
+            id_ = side_run + joint
             gw, gd = iw - 2 * clear, id_ - clear
             if gw >= 200 and gd >= 200:
                 options.append((round(gw), round(gd), iw, id_))
@@ -87,7 +91,19 @@ def grate_options(
         abs(o[0] - grate_width) + abs(o[1] - grate_depth),
         -o[0] - o[1],
     ))
-    return options[:max_options]
+
+    # Neben den naechsten Massen sollen auch die benachbarten Halbsteinraster
+    # sichtbar bleiben. So verschwindet z. B. ein kleineres Rastermass nicht
+    # nur deshalb aus der Liste, weil mehrere Tiefenvarianten naeher liegen.
+    width_options = sorted({o[0] for o in options}, key=lambda w: abs(w - grate_width))[:4]
+    depth_options = sorted({o[1] for o in options}, key=lambda d: abs(d - grate_depth))[:3]
+    nearby = [o for o in options if o[0] in width_options and o[1] in depth_options]
+    nearby.sort(key=lambda o: (
+        (o[0] < grate_width) + (o[1] < grate_depth),
+        abs(o[0] - grate_width) + abs(o[1] - grate_depth),
+        -o[0] - o[1],
+    ))
+    return nearby[:max_options]
 
 
 def num_rows(target_height: float, joint: float) -> int:
@@ -196,6 +212,7 @@ class Plan:
     joint: float
     reserve: float
     target_height: float
+    grate_height: float
     inner_width_target: float
     inner_depth_target: float
     inner_width: float
@@ -229,6 +246,7 @@ def build_plan(
     clear: float = 10.0,
     joint: float = 10.0,
     reserve: float = 5.0,
+    grate_height: float = DEFAULT_GRATE_HEIGHT,
     inner_width: float | None = None,
     inner_depth: float | None = None,
 ) -> Plan:
@@ -240,11 +258,14 @@ def build_plan(
     inner_depth_target = inner_depth
     outer_width_des = inner_width + 2 * WALL
 
-    # Lage A bekommt die Ecken aus der Rueckwand. Dafuer muessen die geraden
-    # Seitenlaeufe und die volle Rueckwand nur aus ganzen Steinen bestehen.
-    side_run = float(_whole_run(inner_depth, joint))
-    back_len = float(_whole_run(outer_width_des, joint))
-    side_len = side_run + WALL
+    # Lage A bekommt die Ecken aus der Rueckwand. Die geraden Wandabschnitte
+    # werden auf das Halbsteinraster gerundet.
+    # Die Seitensteine enden vor der Rueckwand; die Fuge liegt zwischen ihrem
+    # Ende und der Rueckwand. Die lichte Tiefe umfasst daher den Seitenlauf
+    # und diese Eckfuge.
+    side_run = float(clean_total(max(0.0, inner_depth - joint), joint))
+    back_len = float(clean_total(outer_width_des, joint))
+    side_len = side_run + joint + WALL
     total = 2 * side_run + back_len
 
     course_a = lay_course(total, start_with_half=False, joint=joint,
@@ -273,6 +294,7 @@ def build_plan(
         joint=joint,
         reserve=reserve,
         target_height=target_height,
+        grate_height=grate_height,
         inner_width_target=inner_width_target,
         inner_depth_target=inner_depth_target,
         inner_width=outer_width - 2 * WALL,
@@ -306,9 +328,10 @@ def plan_text(p: Plan) -> str:
         f"Gerundet auf Ziegelraster (Fuge {p.joint:.0f} mm):",
         f"  Rueckwand  ({p.back_len:.0f} mm aussen)",
         f"  Seitenwaende ({p.side_len:.0f} mm aussen, je 1x)",
-        f"  Lage A Wandabschnitte: {2 * (p.side_len - WALL) + p.back_len:.0f} mm",
-        f"  Lage B Seitenlauf: {p.side_len + p.joint:.0f} mm "
-        f"(inkl. {p.joint:.0f} mm Ueberstand)",
+        f"  Lage A Wandabschnitte: "
+        f"{2 * (p.side_len - WALL - p.joint) + p.back_len:.0f} mm",
+        f"  Lage B Seitenlauf: {p.side_len:.0f} mm "
+        f"(inkl. {p.joint:.0f} mm Eckfugenbereich)",
         "",
         "Tatsaechliche Masze:",
         f"  Aussen: {p.outer_width:.0f} x {p.outer_depth:.0f} mm (B x T)",
@@ -317,6 +340,7 @@ def plan_text(p: Plan) -> str:
         f"hinten {p.inner_depth - p.grate_depth:.0f} mm",
         f"  Hoehe: {p.rows} Schichten = {p.height:.0f} mm "
         f"(Wunschhoehe {p.target_height:.0f} mm)",
+        f"  Rosthoehe: {p.grate_height:.0f} mm ueber Grundflaeche",
         "",
         "Steinbedarf (wechselnder Eckverband, jede 2. Schicht versetzt):",
         f"  Lage A (ungerade Schichten): {p.course_a_whole} ganze + "
@@ -331,7 +355,7 @@ def plan_text(p: Plan) -> str:
         "In Lage A ueberdeckt die Rueckwand die beiden Ecken.",
         "In Lage B laufen die Seitensteine durch die Ecken; die Rueckwand",
         f"beginnt mit je {p.joint:.0f} mm Fuge. Es gibt keine Ueberlappung.",
-        "Halbe Steine liegen nur an den beiden freien Seitenenden.",
+        "Halbe Steine liegen an den Rasterenden der Wandabschnitte.",
         "Die Reserve bezieht sich auf ganze + halbe Steine.",
     ]
     return "\n".join(lines)
@@ -373,6 +397,9 @@ def _ask_choice(max_option: int) -> int | None:
 
 
 def main() -> None:
+    grate_height = _ask_float(
+        "Rosthoehe ueber Grundflaeche [mm]", default=DEFAULT_GRATE_HEIGHT
+    )
     grate_width = _ask_float("Wunsch Rost-Breite [mm]")
     grate_depth = _ask_float("Wunsch Rost-Tiefe [mm]")
     target_height = _ask_float("Wunschhoehe (Oberkante der Waende) [mm]")
@@ -398,6 +425,7 @@ def main() -> None:
             clear=clear,
             joint=joint,
             reserve=reserve,
+            grate_height=grate_height,
             inner_width=float(iw),
             inner_depth=float(id_),
         )
@@ -409,6 +437,7 @@ def main() -> None:
             clear=clear,
             joint=joint,
             reserve=reserve,
+            grate_height=grate_height,
         )
     print()
     print(plan_text(plan))

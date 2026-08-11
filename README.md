@@ -19,6 +19,7 @@ Das Programm fragt interaktiv ab:
 
 | Eingabe | Default |
 |---|---|
+| Rosthöhe über Grundfläche [mm] | 150 |
 | Wunsch Rost-Breite / Rost-Tiefe [mm] | – |
 | Wunschhöhe (Oberkante der Wände) [mm] | – |
 | Spielraum Rost – Wand [mm] | 10 |
@@ -43,9 +44,8 @@ ausgegeben.
   sodass keine Steine geschnitten werden müssen
 - Die tatsächlich erreichbaren Maße (und der daraus folgende größere
   Spielraum) werden im Plan ausgewiesen
-- Die Montagehöhe des Rosts wird über innen verschraubte Schienen später
-  festgelegt und daher nicht geplant; in der Vorderansicht ist der Rost nur
-  schematisch in halber Höhe dargestellt
+- Die Rosthöhe über der Grundfläche wird abgefragt und standardmäßig mit 150 mm
+  geplant
 
 ## Tests
 
